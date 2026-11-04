@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: menu4d
+      POSTGRES_PASSWORD: menu4d
+      POSTGRES_DB: menu4d
+    ports:
+      - "5432:5432"
+    volumes:
+      - menu4d_pg:/var/lib/postgresql/data
+
+volumes:
+  menu4d_pg:
+
