@@ -6,20 +6,21 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const money = new Intl.NumberFormat('es-AR', {
+const money = new Intl.NumberFormat('es-PE', {
   style: 'currency',
-  currency: 'ARS',
-  maximumFractionDigits: 0,
+  currency: 'PEN',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
 
-/** Formatea centavos → "$ 12.500" */
+/** Formatea centavos → "S/ 12.50" */
 export function formatMoney(cents: number) {
-  return money.format(Math.round(cents / 100));
+  return money.format((cents ?? 0) / 100);
 }
 
 export const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   cash: 'Efectivo',
-  mercado_pago: 'Mercado Pago / Billetera',
+  mercado_pago: 'Yape / Plin / Digital',
   credit_card: 'Tarjeta de crédito',
   debit_card: 'Tarjeta de débito',
 };

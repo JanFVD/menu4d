@@ -9,6 +9,7 @@ import {
   Minus,
   PartyPopper,
   Plus,
+  QrCode,
   Receipt,
   ShoppingBag,
   UtensilsCrossed,
@@ -109,8 +110,15 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
     const onClosed = () => {
       setOrders([]);
       setRequests([]);
+      setCart({});
+      setCartOpen(false);
       setBillOpen(false);
       setClosed(true);
+      try {
+        window.close();
+      } catch {
+        /* noop */
+      }
     };
 
     if (s.connected) join();
@@ -217,6 +225,42 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
   };
 
   const activeOrders = [...orders].reverse();
+
+  if (closed) {
+    return (
+      <div className="fixed inset-0 z-50 flex min-h-dvh flex-col items-center justify-center bg-background p-6 text-center animate-fade-in">
+        <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-3xl bg-primary/10 text-primary">
+          <QrCode className="h-12 w-12" />
+        </div>
+        <h1 className="text-2xl font-black tracking-tight sm:text-3xl">¡Gracias por tu visita!</h1>
+        <p className="mt-2 text-base font-bold text-foreground">Mesa #{table.number} liberada</p>
+        <p className="mt-3 max-w-sm text-sm text-muted-foreground leading-relaxed">
+          El proceso de atención y cobro ha finalizado con éxito y la mesa quedó liberada.
+        </p>
+        <div className="mt-5 max-w-sm rounded-xl border border-primary/20 bg-primary/5 p-4 text-center">
+          <p className="text-sm font-semibold text-primary">
+            Para volver a realizar un pedido, debes volver a escanear el código QR de tu mesa.
+          </p>
+        </div>
+        <div className="mt-8 flex w-full max-w-xs flex-col gap-3">
+          <Button
+            size="lg"
+            className="w-full gap-2 font-bold"
+            onClick={() => {
+              try {
+                window.close();
+              } catch {
+                /* noop */
+              }
+              window.location.href = '/';
+            }}
+          >
+            Cerrar ventana
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto min-h-dvh max-w-lg pb-40">
@@ -393,17 +437,6 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
         onConfirm={requestBill}
       />
 
-      {/* Mesa cerrada */}
-      <Dialog open={closed} onOpenChange={setClosed}>
-        <DialogContent className="items-center text-center">
-          <PartyPopper className="h-12 w-12 text-primary" />
-          <DialogTitle className="pr-0">¡Gracias por tu visita!</DialogTitle>
-          <DialogDescription>El pago fue registrado y la mesa quedó liberada. ¡Te esperamos pronto!</DialogDescription>
-          <Button className="w-full" onClick={() => setClosed(false)}>
-            Volver a la carta
-          </Button>
-        </DialogContent>
-      </Dialog>
 
       {/* Toast */}
       {toast && (

@@ -25,6 +25,7 @@ export interface ProductDTO {
   description: string;
   price: number; // centavos
   imageUrl: string | null;
+  available?: boolean;
 }
 
 export interface CategoryDTO {
@@ -66,12 +67,47 @@ export interface ServiceRequestDTO {
   createdAt: string;
 }
 
+export type StaffRole = 'admin' | 'cocina' | 'caja' | 'mozo';
+export const STAFF_ROLES: { id: StaffRole; label: string }[] = [
+  { id: 'admin', label: 'Admin' },
+  { id: 'cocina', label: 'Cocina' },
+  { id: 'caja', label: 'Caja' },
+  { id: 'mozo', label: 'Mozo' },
+];
+
+export interface StaffUserDTO {
+  id: string;
+  username: string;
+  name: string;
+  roles: StaffRole[];
+  active: boolean;
+}
+
+export interface BusinessSettingDTO {
+  id: string;
+  name: string;
+  ruc: string;
+  address: string;
+  phone: string;
+  logoUrl: string | null;
+  ticketFooter: string;
+}
+
+export interface PaymentItemDTO {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  total: number;
+}
+
 export interface PaymentDTO {
   id: string;
   tableId: string;
   tableNumber: number;
   method: PaymentMethod;
   amount: number;
+  cashierName?: string | null;
+  items?: PaymentItemDTO[];
   createdAt: string;
 }
 
@@ -88,6 +124,7 @@ export interface DashboardSnapshot {
   orders: OrderDTO[]; // todas las órdenes impagas
   requests: ServiceRequestDTO[]; // solicitudes pendientes
   payments: PaymentDTO[]; // cobros del turno (desde 00:00)
+  settings?: BusinessSettingDTO;
 }
 
 // ----------------------------------------------------------------------------- Payloads
@@ -128,7 +165,7 @@ export interface ClientToServerEvents {
   'service:resolve': (payload: { requestId: string }, ack: Ack<ServiceRequestDTO>) => void;
 
   /** Caja confirma el cobro → órdenes `paid`, solicitudes resueltas, mesa `free`. */
-  'payment:confirm': (payload: { tableId: string; method: PaymentMethod }, ack: Ack<PaymentDTO | null>) => void;
+  'payment:confirm': (payload: { tableId: string; method: PaymentMethod; cashierName?: string }, ack: Ack<PaymentDTO | null>) => void;
 }
 
 /** Servidor → Clientes (broadcasts). */
@@ -139,6 +176,7 @@ export interface ServerToClientEvents {
   'service:updated': (req: ServiceRequestDTO) => void; // → staff + table
   'table:updated': (table: TableDTO) => void; // → staff + table
   'payment:created': (payment: PaymentDTO) => void; // → staff
+  'settings:updated': (settings: BusinessSettingDTO) => void; // → staff
   /** → staff + table. Mesa cobrada: el cliente resetea su pantalla y el staff descarta esas órdenes. */
   'table:closed': (payload: { tableId: string; orderIds: string[] }) => void;
 }

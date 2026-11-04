@@ -144,10 +144,38 @@ model Payment {
   amount    Int // centavos
   createdAt DateTime      @default(now()) @map("created_at")
 
-  table  Table   @relation(fields: [tableId], references: [id])
-  orders Order[]
+  table       Table   @relation(fields: [tableId], references: [id])
+  orders      Order[]
+  cashierName String? @map("cashier_name")
 
   @@index([createdAt])
   @@map("payments")
 }
+
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String
+  name      String
+  roles     String[] @default(["mozo"])
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model BusinessSetting {
+  id           String   @id @default("default")
+  name         String   @default("Mi Restaurante")
+  ruc          String   @default("20123456789")
+  address      String   @default("Av. Principal 123, Lima")
+  phone        String   @default("+51 999 888 777")
+  logoUrl      String?  @map("logo_url")
+  ticketFooter String   @default("¡Gracias por su preferencia!") @map("ticket_footer")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("business_settings")
+}
+
 

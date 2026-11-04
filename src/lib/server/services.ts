@@ -26,7 +26,18 @@ type OrderWithRels = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
 
 const requestInclude = { table: true } satisfies Prisma.ServiceRequestInclude;
 type RequestWithRels = Prisma.ServiceRequestGetPayload<{ include: typeof requestInclude }>;
-type PaymentWithRels = Prisma.PaymentGetPayload<{ include: { table: true } }>;
+
+const paymentInclude = {
+  table: true,
+  orders: {
+    include: {
+      items: {
+        include: { product: true },
+      },
+    },
+  },
+} satisfies Prisma.PaymentInclude;
+type PaymentWithRels = Prisma.PaymentGetPayload<{ include: typeof paymentInclude }>;
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 
@@ -67,14 +78,33 @@ export const toRequestDTO = (r: RequestWithRels): ServiceRequestDTO => ({
   createdAt: r.createdAt.toISOString(),
 });
 
-export const toPaymentDTO = (p: PaymentWithRels): PaymentDTO => ({
-  id: p.id,
-  tableId: p.tableId,
-  tableNumber: p.table.number,
-  method: p.method,
-  amount: p.amount,
-  createdAt: p.createdAt.toISOString(),
-});
+export const toPaymentDTO = (p: PaymentWithRels): PaymentDTO => {
+  const itemMap = new Map<string, { name: string; quantity: number; unitPrice: number; total: number }>();
+  p.orders?.forEach((o) => {
+    o.items?.forEach((i) => {
+      const prev = itemMap.get(i.productId) ?? {
+        name: i.product?.name ?? 'Producto',
+        quantity: 0,
+        unitPrice: i.unitPrice,
+        total: 0,
+      };
+      prev.quantity += i.quantity;
+      prev.total += i.quantity * i.unitPrice;
+      itemMap.set(i.productId, prev);
+    });
+  });
+
+  return {
+    id: p.id,
+    tableId: p.tableId,
+    tableNumber: p.table.number,
+    method: p.method,
+    amount: p.amount,
+    cashierName: p.cashierName,
+    items: [...itemMap.values()],
+    createdAt: p.createdAt.toISOString(),
+  };
+};
 
 // ----------------------------------------------------------------------------- Queries
 async function requireTable(tableId: unknown) {
@@ -105,15 +135,16 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
   const startOfShift = new Date();
   startOfShift.setHours(0, 0, 0, 0);
 
-  const [tables, orders, requests, payments] = await Promise.all([
+  const [tables, orders, requests, payments, settings] = await Promise.all([
     prisma.table.findMany({ orderBy: { number: 'asc' } }),
     prisma.order.findMany({ where: { status: { not: 'paid' } }, include: orderInclude, orderBy: { createdAt: 'asc' } }),
     prisma.serviceRequest.findMany({ where: { status: 'pending' }, include: requestInclude, orderBy: { createdAt: 'asc' } }),
     prisma.payment.findMany({
       where: { createdAt: { gte: startOfShift } },
-      include: { table: true },
+      include: paymentInclude,
       orderBy: { createdAt: 'desc' },
     }),
+    prisma.businessSetting.findUnique({ where: { id: 'default' } }),
   ]);
 
   return {
@@ -121,6 +152,7 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
     orders: orders.map(toOrderDTO),
     requests: requests.map(toRequestDTO),
     payments: payments.map(toPaymentDTO),
+    settings: settings ?? undefined,
   };
 }
 
@@ -241,7 +273,7 @@ export async function resolveServiceRequest(requestId: string) {
  * Cierra la mesa: crea el Payment con el total de las órdenes impagas,
  * marca órdenes como `paid`, resuelve solicitudes pendientes y libera la mesa.
  */
-export async function confirmPayment(tableId: string, method: PaymentMethod) {
+export async function confirmPayment(tableId: string, method: PaymentMethod, cashierName?: string) {
   await requireTable(tableId);
   if (!PAYMENT_METHODS.includes(method)) throw new AppError('Método de pago inválido');
 
@@ -250,17 +282,26 @@ export async function confirmPayment(tableId: string, method: PaymentMethod) {
     const amount = unpaid.reduce((acc, o) => acc + o.total, 0);
     const now = new Date();
 
-    const payment =
+    const createdPayment =
       amount > 0
-        ? await tx.payment.create({ data: { tableId, method, amount }, include: { table: true } })
+        ? await tx.payment.create({
+            data: { tableId, method, amount, cashierName: cashierName ?? null },
+          })
         : null;
 
-    if (unpaid.length) {
+    if (unpaid.length && createdPayment) {
       await tx.order.updateMany({
         where: { id: { in: unpaid.map((o) => o.id) } },
-        data: { status: 'paid', paidAt: now, paymentId: payment?.id ?? null },
+        data: { status: 'paid', paidAt: now, paymentId: createdPayment.id },
       });
     }
+
+    const payment = createdPayment
+      ? await tx.payment.findUnique({
+          where: { id: createdPayment.id },
+          include: paymentInclude,
+        })
+      : null;
 
     const pending = await tx.serviceRequest.findMany({ where: { tableId, status: 'pending' }, include: requestInclude });
     await tx.serviceRequest.updateMany({

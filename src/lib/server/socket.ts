@@ -114,7 +114,7 @@ export function registerSocketHandlers(io: IO) {
     socket.on('payment:confirm', (payload, ack) =>
       handle(ack, async () => {
         requireStaff(socket);
-        const result = await confirmPayment(payload?.tableId, payload?.method);
+        const result = await confirmPayment(payload?.tableId, payload?.method, payload?.cashierName);
         const tableId = result.table.id;
         if (result.payment) io.to(rooms.staff).emit('payment:created', result.payment);
         for (const r of result.resolvedRequests) toTableAndStaff(tableId).emit('service:updated', r);

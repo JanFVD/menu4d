@@ -1,17 +1,20 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { KeyRound, Loader2 } from 'lucide-react';
+import { ChefHat, KeyRound, Loader2, Lock, ShieldCheck, UserCheck, Users, Wallet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { getSocket, request, useConnected } from '@/lib/socket-client';
 import { playChime } from '@/lib/utils';
 import type {
+  BusinessSettingDTO,
   DashboardSnapshot,
   OrderDTO,
   OrderStatus,
   PaymentDTO,
   PaymentMethod,
   ServiceRequestDTO,
+  StaffUserDTO,
   TableDTO,
 } from '@/lib/types';
 
@@ -24,6 +27,7 @@ type Action =
   | { type: 'request'; request: ServiceRequestDTO }
   | { type: 'table'; table: TableDTO }
   | { type: 'payment'; payment: PaymentDTO }
+  | { type: 'settings'; settings: BusinessSettingDTO }
   | { type: 'closed'; orderIds: string[] };
 
 function upsert<T extends { id: string }>(list: T[], item: T, keep: boolean) {
@@ -45,6 +49,8 @@ function reducer(state: State, action: Action): State {
       return state.payments.some((p) => p.id === action.payment.id)
         ? state
         : { ...state, payments: [action.payment, ...state.payments] };
+    case 'settings':
+      return { ...state, settings: action.settings };
     case 'closed':
       return { ...state, orders: state.orders.filter((o) => !action.orderIds.includes(o.id)) };
   }
@@ -54,9 +60,12 @@ const initial: State = { tables: [], orders: [], requests: [], payments: [], rea
 
 interface DashboardContextValue extends State {
   connected: boolean;
+  staffUser: StaffUserDTO | null;
+  logout: () => void;
   updateOrderStatus: (orderId: string, status: OrderStatus) => Promise<void>;
   resolveRequest: (requestId: string) => Promise<void>;
-  confirmPayment: (tableId: string, method: PaymentMethod) => Promise<void>;
+  confirmPayment: (tableId: string, method: PaymentMethod, cashierName?: string) => Promise<PaymentDTO | null>;
+  updateSettings: (settings: BusinessSettingDTO) => void;
   error: string | null;
   clearError: () => void;
 }
@@ -74,11 +83,65 @@ export function DashboardProvider({ children, sound = true }: { children: React.
   const [state, dispatch] = useReducer(reducer, initial);
   const connected = useConnected();
   const [error, setError] = useState<string | null>(null);
+
+  // Staff authentication
+  const [staffUser, setStaffUser] = useState<StaffUserDTO | null>(null);
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
   const [needsPin, setNeedsPin] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const pinRef = useRef<string | undefined>(undefined);
   const soundRef = useRef(sound);
   soundRef.current = sound;
+
+  // Restore staff session on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('menu4d:staff_user');
+      if (saved) {
+        setStaffUser(JSON.parse(saved));
+      }
+    } catch {
+      /* noop */
+    }
+  }, []);
+
+  const handleLogin = async (e?: React.FormEvent, customUser?: string, customPass?: string) => {
+    if (e) e.preventDefault();
+    const u = customUser || loginUsername;
+    const p = customPass || loginPassword;
+    if (!u || !p) {
+      setLoginError('Ingresa usuario y contraseña');
+      return;
+    }
+
+    try {
+      setLoginLoading(true);
+      setLoginError(null);
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'Credenciales inválidas');
+
+      setStaffUser(data.user);
+      localStorage.setItem('menu4d:staff_user', JSON.stringify(data.user));
+    } catch (err) {
+      setLoginError((err as Error).message);
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem('menu4d:staff_user');
+    setStaffUser(null);
+  };
 
   const join = useCallback(async () => {
     const s = getSocket();
@@ -111,11 +174,11 @@ export function DashboardProvider({ children, sound = true }: { children: React.
     };
     const onRequest = (r: ServiceRequestDTO) => {
       dispatch({ type: 'request', request: r });
-      // Re-aviso de una solicitud pendiente existente (el cliente insistió)
       if (r.status === 'pending' && soundRef.current) playChime(660);
     };
     const onTable = (table: TableDTO) => dispatch({ type: 'table', table });
     const onPayment = (payment: PaymentDTO) => dispatch({ type: 'payment', payment });
+    const onSettings = (settings: BusinessSettingDTO) => dispatch({ type: 'settings', settings });
     const onClosed = ({ orderIds }: { orderIds: string[] }) => dispatch({ type: 'closed', orderIds });
 
     if (s.connected) join();
@@ -126,6 +189,7 @@ export function DashboardProvider({ children, sound = true }: { children: React.
     s.on('service:updated', onRequest);
     s.on('table:updated', onTable);
     s.on('payment:created', onPayment);
+    s.on('settings:updated', onSettings);
     s.on('table:closed', onClosed);
     return () => {
       s.off('connect', join);
@@ -135,11 +199,11 @@ export function DashboardProvider({ children, sound = true }: { children: React.
       s.off('service:updated', onRequest);
       s.off('table:updated', onTable);
       s.off('payment:created', onPayment);
+      s.off('settings:updated', onSettings);
       s.off('table:closed', onClosed);
     };
   }, [join]);
 
-  // Las respuestas (ack) también actualizan el store: la UI no depende sólo del broadcast.
   const run = useCallback(async <T,>(fn: () => Promise<T>) => {
     try {
       return await fn();
@@ -153,6 +217,8 @@ export function DashboardProvider({ children, sound = true }: { children: React.
     () => ({
       ...state,
       connected,
+      staffUser,
+      logout,
       error,
       clearError: () => setError(null),
       updateOrderStatus: (orderId, status) =>
@@ -167,15 +233,135 @@ export function DashboardProvider({ children, sound = true }: { children: React.
           const r = await request<ServiceRequestDTO>((ack) => s.emit('service:resolve', { requestId }, ack));
           dispatch({ type: 'request', request: r });
         }),
-      confirmPayment: (tableId, method) =>
+      confirmPayment: (tableId, method, cashierName) =>
         run(async () => {
           const s = getSocket();
-          const payment = await request<PaymentDTO | null>((ack) => s.emit('payment:confirm', { tableId, method }, ack));
+          const cashier = cashierName || staffUser?.name || staffUser?.username;
+          const payment = await request<PaymentDTO | null>((ack) =>
+            s.emit('payment:confirm', { tableId, method, cashierName: cashier }, ack),
+          );
           if (payment) dispatch({ type: 'payment', payment });
+          return payment;
         }),
+      updateSettings: (settings: BusinessSettingDTO) => {
+        dispatch({ type: 'settings', settings });
+      },
     }),
-    [state, connected, error, run],
+    [state, connected, staffUser, error, run],
   );
+
+  // Si no está autenticado como personal del staff, mostrar pantalla de Login
+  if (!staffUser) {
+    return (
+      <div className="flex min-h-dvh flex-col items-center justify-center p-4">
+        <div className="w-full max-w-md space-y-6 rounded-2xl border bg-card p-6 shadow-2xl sm:p-8">
+          <div className="text-center">
+            <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <ShieldCheck className="h-8 w-8" />
+            </div>
+            <h1 className="text-2xl font-black tracking-tight">Acceso Staff</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Ingresa tus credenciales para gestionar el local
+            </p>
+          </div>
+
+          {loginError && (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-center text-sm text-red-300">
+              {loginError}
+            </div>
+          )}
+
+          <form onSubmit={(e) => handleLogin(e)} className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold">Usuario</label>
+              <input
+                required
+                autoFocus
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value.toLowerCase())}
+                placeholder="admin, cocina, caja o mozo"
+                className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs font-semibold">Contraseña</label>
+              <input
+                required
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full rounded-lg border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+
+            <Button type="submit" size="lg" className="w-full" disabled={loginLoading}>
+              {loginLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Lock className="mr-2 h-4 w-4" />}
+              Ingresar al Sistema
+            </Button>
+          </form>
+
+          {/* Accesos rápidos con credenciales por defecto */}
+          <div className="space-y-2 border-t pt-4 text-xs">
+            <p className="text-center font-semibold text-muted-foreground">
+              Credenciales de demostración rápida:
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginUsername('admin');
+                  setLoginPassword('admin123');
+                  handleLogin(undefined, 'admin', 'admin123');
+                }}
+                className="rounded-lg border bg-muted/40 p-2 text-left hover:border-primary hover:bg-muted"
+              >
+                <div className="font-bold text-foreground">Admin</div>
+                <div className="text-[10px] text-muted-foreground">admin / admin123</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginUsername('caja');
+                  setLoginPassword('caja123');
+                  handleLogin(undefined, 'caja', 'caja123');
+                }}
+                className="rounded-lg border bg-muted/40 p-2 text-left hover:border-primary hover:bg-muted"
+              >
+                <div className="font-bold text-foreground">Caja</div>
+                <div className="text-[10px] text-muted-foreground">caja / caja123</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginUsername('cocina');
+                  setLoginPassword('cocina123');
+                  handleLogin(undefined, 'cocina', 'cocina123');
+                }}
+                className="rounded-lg border bg-muted/40 p-2 text-left hover:border-primary hover:bg-muted"
+              >
+                <div className="font-bold text-foreground">Cocina</div>
+                <div className="text-[10px] text-muted-foreground">cocina / cocina123</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginUsername('mozo');
+                  setLoginPassword('mozo123');
+                  handleLogin(undefined, 'mozo', 'mozo123');
+                }}
+                className="rounded-lg border bg-muted/40 p-2 text-left hover:border-primary hover:bg-muted"
+              >
+                <div className="font-bold text-foreground">Mozo</div>
+                <div className="text-[10px] text-muted-foreground">mozo / mozo123</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (needsPin) {
     return (
@@ -217,4 +403,3 @@ export function DashboardProvider({ children, sound = true }: { children: React.
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;
 }
-

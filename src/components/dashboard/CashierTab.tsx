@@ -1,13 +1,14 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { Banknote, CheckCircle2, CreditCard, Loader2, Receipt, Wallet, type LucideIcon } from 'lucide-react';
+import { Banknote, CheckCircle2, CreditCard, Loader2, Printer, Receipt, Wallet, type LucideIcon } from 'lucide-react';
 import { useDashboard } from './DashboardProvider';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { SalesTicketDialog } from './SalesTicketDialog';
 import { cn, formatMoney, PAYMENT_LABELS } from '@/lib/utils';
-import { PAYMENT_METHODS, type OrderDTO, type PaymentMethod, type TableDTO } from '@/lib/types';
+import { PAYMENT_METHODS, type OrderDTO, type PaymentDTO, type PaymentMethod, type TableDTO } from '@/lib/types';
 
 const ICONS: Record<PaymentMethod, LucideIcon> = {
   cash: Banknote,
@@ -17,7 +18,9 @@ const ICONS: Record<PaymentMethod, LucideIcon> = {
 };
 
 export function CashierTab() {
-  const { tables, orders, requests, payments } = useDashboard();
+  const { tables, orders, requests, payments, settings } = useDashboard();
+  const [ticketPayment, setTicketPayment] = useState<PaymentDTO | null>(null);
+  const [ticketOpen, setTicketOpen] = useState(false);
 
   // Mesas con consumo abierto; primero las que pidieron la cuenta.
   const open = useMemo(() => {
@@ -45,6 +48,11 @@ export function CashierTab() {
 
   const total = payments.reduce((a, p) => a + p.amount, 0);
 
+  const handleShowTicket = (payment: PaymentDTO) => {
+    setTicketPayment(payment);
+    setTicketOpen(true);
+  };
+
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
       <section className="space-y-3">
@@ -54,7 +62,13 @@ export function CashierTab() {
         {open.length === 0 && <p className="text-sm text-muted-foreground">No hay mesas con consumo abierto.</p>}
         <div className="grid gap-3 md:grid-cols-2">
           {open.map(({ table, orders: tOrders, bill }) => (
-            <CheckoutCard key={table.id} table={table} orders={tOrders} requested={bill?.paymentMethod ?? null} />
+            <CheckoutCard
+              key={table.id}
+              table={table}
+              orders={tOrders}
+              requested={bill?.paymentMethod ?? null}
+              onPaid={handleShowTicket}
+            />
           ))}
         </div>
       </section>
@@ -94,24 +108,57 @@ export function CashierTab() {
           <CardContent className="max-h-80 space-y-2 overflow-y-auto">
             {payments.length === 0 && <p className="text-sm text-muted-foreground">Todavía no hay cobros.</p>}
             {payments.map((p) => (
-              <div key={p.id} className="flex items-center justify-between text-sm">
-                <span>
-                  <b>Mesa {p.tableNumber}</b>{' '}
-                  <span className="text-muted-foreground">
-                    · {new Date(p.createdAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })} · {PAYMENT_LABELS[p.method]}
+              <div key={p.id} className="flex items-center justify-between gap-2 border-b border-border/40 pb-2 text-sm last:border-0">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <b className="font-bold">Mesa #{p.tableNumber}</b>
+                    <span className="text-xs text-muted-foreground">{PAYMENT_LABELS[p.method]}</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(p.createdAt).toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit' })}
+                    {p.cashierName && ` · ${p.cashierName}`}
                   </span>
-                </span>
-                <span className="font-semibold tabular-nums">{formatMoney(p.amount)}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold tabular-nums">{formatMoney(p.amount)}</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => handleShowTicket(p)}
+                    title="Imprimir ticket de venta"
+                  >
+                    <Printer className="h-3.5 w-3.5 text-primary" />
+                  </Button>
+                </div>
               </div>
             ))}
           </CardContent>
         </Card>
       </aside>
+
+      {/* Modal Ticket de Venta */}
+      <SalesTicketDialog
+        open={ticketOpen}
+        onOpenChange={setTicketOpen}
+        payment={ticketPayment}
+        settings={settings}
+      />
     </div>
   );
 }
 
-function CheckoutCard({ table, orders, requested }: { table: TableDTO; orders: OrderDTO[]; requested: PaymentMethod | null }) {
+function CheckoutCard({
+  table,
+  orders,
+  requested,
+  onPaid,
+}: {
+  table: TableDTO;
+  orders: OrderDTO[];
+  requested: PaymentMethod | null;
+  onPaid: (p: PaymentDTO) => void;
+}) {
   const { confirmPayment } = useDashboard();
   const [method, setMethod] = useState<PaymentMethod | null>(null);
   const [busy, setBusy] = useState(false);
@@ -120,10 +167,10 @@ function CheckoutCard({ table, orders, requested }: { table: TableDTO; orders: O
   const notDelivered = orders.filter((o) => o.status !== 'delivered').length;
 
   const lines = useMemo(() => {
-    const m = new Map<string, { name: string; quantity: number; amount: number }>();
+    const m = new Map<string, { name: string; quantity: number; amount: number; unitPrice: number }>();
     orders.forEach((o) =>
       o.items.forEach((i) => {
-        const l = m.get(i.productId) ?? { name: i.name, quantity: 0, amount: 0 };
+        const l = m.get(i.productId) ?? { name: i.name, quantity: 0, amount: 0, unitPrice: i.unitPrice };
         l.quantity += i.quantity;
         l.amount += i.quantity * i.unitPrice;
         m.set(i.productId, l);
@@ -139,7 +186,26 @@ function CheckoutCard({ table, orders, requested }: { table: TableDTO; orders: O
     if (!window.confirm(msg)) return;
     setBusy(true);
     try {
-      await confirmPayment(table.id, selected);
+      const payment = await confirmPayment(table.id, selected);
+      if (payment) {
+        onPaid(payment);
+      } else if (total > 0) {
+        // Fallback local si payment era null
+        onPaid({
+          id: 'pay_' + Date.now(),
+          tableId: table.id,
+          tableNumber: table.number,
+          method: selected,
+          amount: total,
+          items: lines.map((l) => ({
+            name: l.name,
+            quantity: l.quantity,
+            unitPrice: l.unitPrice,
+            total: l.amount,
+          })),
+          createdAt: new Date().toISOString(),
+        });
+      }
     } catch {
       /* error mostrado por el provider */
     } finally {
@@ -192,10 +258,9 @@ function CheckoutCard({ table, orders, requested }: { table: TableDTO; orders: O
 
         <Button variant="success" className="mt-auto" onClick={confirm} disabled={busy}>
           {busy ? <Loader2 className="animate-spin" /> : <CheckCircle2 />}
-          {total > 0 ? 'Confirmar cobro y liberar mesa' : 'Liberar mesa'}
+          {total > 0 ? 'Confirmar cobro, imprimir ticket y liberar mesa' : 'Liberar mesa'}
         </Button>
       </CardContent>
     </Card>
   );
 }
-
