@@ -1,0 +1,153 @@
+// =============================================================================
+// Menu4D — Esquema relacional (PostgreSQL + Prisma)
+// Convención: montos en CENTAVOS (Int) para evitar errores de punto flotante.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TableStatus {
+  free
+  occupied
+}
+
+enum OrderStatus {
+  received // Cliente envió la comanda
+  confirmed // Cocina / salón la aceptó
+  cooking // En preparación
+  on_the_way // Lista: el mozo la está llevando
+  delivered // Entregada en la mesa
+  paid // Cobrada (cierra el ciclo)
+}
+
+enum ServiceRequestType {
+  call_waiter
+  request_bill
+}
+
+enum ServiceRequestStatus {
+  pending
+  resolved
+}
+
+enum PaymentMethod {
+  cash
+  mercado_pago
+  credit_card
+  debit_card
+}
+
+model Table {
+  id        String      @id @default(cuid()) // Se usa en la URL del QR: /mesa/:id (no adivinable)
+  number    Int         @unique
+  status    TableStatus @default(free)
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  orders          Order[]
+  serviceRequests ServiceRequest[]
+  payments        Payment[]
+
+  @@map("tables")
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  sortOrder Int       @default(0) @map("sort_order")
+  products  Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          String  @id @default(cuid())
+  name        String
+  description String  @default("")
+  price       Int // centavos
+  imageUrl    String? @map("image_url")
+  available   Boolean @default(true)
+  sortOrder   Int     @default(0) @map("sort_order")
+  categoryId  String  @map("category_id")
+
+  category   Category    @relation(fields: [categoryId], references: [id])
+  orderItems OrderItem[]
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+model Order {
+  id          String      @id @default(cuid())
+  number      Int         @unique @default(autoincrement()) // Nº de comanda legible para cocina
+  tableId     String      @map("table_id")
+  status      OrderStatus @default(received)
+  total       Int // centavos (snapshot calculado en el servidor)
+  paymentId   String?     @map("payment_id")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  confirmedAt DateTime?   @map("confirmed_at")
+  readyAt     DateTime?   @map("ready_at")
+  deliveredAt DateTime?   @map("delivered_at")
+  paidAt      DateTime?   @map("paid_at")
+
+  table   Table       @relation(fields: [tableId], references: [id])
+  payment Payment?    @relation(fields: [paymentId], references: [id])
+  items   OrderItem[]
+
+  @@index([tableId, status])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String  @map("order_id")
+  productId String  @map("product_id")
+  quantity  Int
+  unitPrice Int     @map("unit_price") // snapshot del precio al momento del pedido
+  notes     String?
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model ServiceRequest {
+  id            String               @id @default(cuid())
+  tableId       String               @map("table_id")
+  type          ServiceRequestType
+  paymentMethod PaymentMethod?       @map("payment_method") // sólo para request_bill
+  status        ServiceRequestStatus @default(pending)
+  createdAt     DateTime             @default(now()) @map("created_at")
+  resolvedAt    DateTime?            @map("resolved_at")
+
+  table Table @relation(fields: [tableId], references: [id])
+
+  @@index([tableId, status])
+  @@index([status])
+  @@map("service_requests")
+}
+
+// Registro de caja: un cobro agrupa todas las órdenes impagas de la mesa
+model Payment {
+  id        String        @id @default(cuid())
+  tableId   String        @map("table_id")
+  method    PaymentMethod
+  amount    Int // centavos
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  table  Table   @relation(fields: [tableId], references: [id])
+  orders Order[]
+
+  @@index([createdAt])
+  @@map("payments")
+}
+

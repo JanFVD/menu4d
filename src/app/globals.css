@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 4%;
+    --foreground: 0 0% 98%;
+    --card: 240 8% 7%;
+    --card-foreground: 0 0% 98%;
+    --primary: 24 95% 53%; /* naranja gastronómico */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 5% 15%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 5% 12%;
+    --muted-foreground: 240 5% 65%;
+    --accent: 240 5% 16%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5% 17%;
+    --input: 240 5% 20%;
+    --ring: 24 95% 53%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}
+
