@@ -44,9 +44,16 @@ enum PaymentMethod {
 }
 
 model Table {
-  id        String      @id @default(cuid()) // Se usa en la URL del QR: /mesa/:id (no adivinable)
-  number    Int         @unique
-  status    TableStatus @default(free)
+  id          String      @id @default(cuid()) // Se usa en la URL del QR: /mesa/:id (no adivinable)
+  number      Int         @unique
+  floor       Int         @default(1)
+  status      TableStatus @default(free)
+  sessionCode String?     @map("session_code")
+
+  mergedWithTableId String? @map("merged_with_table_id")
+  mergedWithTable   Table?  @relation("TableMerges", fields: [mergedWithTableId], references: [id])
+  mergedTables      Table[] @relation("TableMerges")
+
   createdAt DateTime    @default(now()) @map("created_at")
   updatedAt DateTime    @updatedAt @map("updated_at")
 
@@ -173,6 +180,7 @@ model BusinessSetting {
   phone        String   @default("+51 999 888 777")
   logoUrl      String?  @map("logo_url")
   ticketFooter String   @default("¡Gracias por su preferencia!") @map("ticket_footer")
+  appDomain    String?  @default("") @map("app_domain")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@map("business_settings")

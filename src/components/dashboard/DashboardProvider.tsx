@@ -65,6 +65,10 @@ interface DashboardContextValue extends State {
   updateOrderStatus: (orderId: string, status: OrderStatus) => Promise<void>;
   resolveRequest: (requestId: string) => Promise<void>;
   confirmPayment: (tableId: string, method: PaymentMethod, cashierName?: string) => Promise<PaymentDTO | null>;
+  cancelSession: (tableId: string) => Promise<void>;
+  mergeTables: (primaryTableId: string, secondaryTableId: string) => Promise<TableDTO>;
+  unmergeTable: (tableId: string) => Promise<TableDTO>;
+  refreshSnapshot: () => Promise<void>;
   updateSettings: (settings: BusinessSettingDTO) => void;
   error: string | null;
   clearError: () => void;
@@ -243,11 +247,27 @@ export function DashboardProvider({ children, sound = true }: { children: React.
           if (payment) dispatch({ type: 'payment', payment });
           return payment;
         }),
+      cancelSession: (tableId) =>
+        run(async () => {
+          const s = getSocket();
+          await request<{ ok: boolean }>((ack) => s.emit('table:cancel-session', { tableId }, ack));
+        }),
+      mergeTables: (primaryTableId, secondaryTableId) =>
+        run(async () => {
+          const s = getSocket();
+          return await request<TableDTO>((ack) => s.emit('table:merge', { primaryTableId, secondaryTableId }, ack));
+        }),
+      unmergeTable: (tableId) =>
+        run(async () => {
+          const s = getSocket();
+          return await request<TableDTO>((ack) => s.emit('table:unmerge', { tableId }, ack));
+        }),
+      refreshSnapshot: join,
       updateSettings: (settings: BusinessSettingDTO) => {
         dispatch({ type: 'settings', settings });
       },
     }),
-    [state, connected, staffUser, error, run],
+    [state, connected, staffUser, error, run, join],
   );
 
   // Si no está autenticado como personal del staff, mostrar pantalla de Login

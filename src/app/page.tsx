@@ -42,8 +42,11 @@ export default async function Home() {
         ) : (
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
             {tables.map((t) => (
-              <Button key={t.id} asChild variant="outline">
-                <Link href={`/mesa/${t.id}`}>Mesa {t.number}</Link>
+              <Button key={t.id} asChild variant="outline" className="flex flex-col h-auto py-2">
+                <Link href={`/mesa/${t.id}`}>
+                  <span className="font-bold">Mesa {t.number}</span>
+                  <span className="text-[10px] text-muted-foreground font-normal">Piso {t.floor || 1}</span>
+                </Link>
               </Button>
             ))}
           </div>

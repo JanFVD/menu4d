@@ -27,6 +27,13 @@ type OrderWithRels = Prisma.OrderGetPayload<{ include: typeof orderInclude }>;
 const requestInclude = { table: true } satisfies Prisma.ServiceRequestInclude;
 type RequestWithRels = Prisma.ServiceRequestGetPayload<{ include: typeof requestInclude }>;
 
+export const tableInclude = {
+  mergedWithTable: { select: { id: true, number: true } },
+  mergedTables: { select: { id: true, number: true } },
+} satisfies Prisma.TableInclude;
+
+type TableWithRels = Prisma.TableGetPayload<{ include: typeof tableInclude }>;
+
 const paymentInclude = {
   table: true,
   orders: {
@@ -41,10 +48,24 @@ type PaymentWithRels = Prisma.PaymentGetPayload<{ include: typeof paymentInclude
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null);
 
-export const toTableDTO = (t: { id: string; number: number; status: TableDTO['status'] }): TableDTO => ({
+export const toTableDTO = (t: {
+  id: string;
+  number: number;
+  floor?: number;
+  status: TableDTO['status'];
+  sessionCode?: string | null;
+  mergedWithTableId?: string | null;
+  mergedWithTable?: { id: string; number: number } | null;
+  mergedTables?: { id: string; number: number }[];
+}): TableDTO => ({
   id: t.id,
   number: t.number,
+  floor: t.floor ?? 1,
   status: t.status,
+  sessionCode: t.sessionCode ?? null,
+  mergedWithTableId: t.mergedWithTableId ?? null,
+  mergedWithTableNumber: t.mergedWithTable?.number ?? null,
+  mergedTables: t.mergedTables?.map((m) => ({ id: m.id, number: m.number })) ?? [],
 });
 
 export const toOrderDTO = (o: OrderWithRels): OrderDTO => ({
@@ -109,13 +130,57 @@ export const toPaymentDTO = (p: PaymentWithRels): PaymentDTO => {
 // ----------------------------------------------------------------------------- Queries
 async function requireTable(tableId: unknown) {
   if (typeof tableId !== 'string' || !tableId) throw new AppError('Mesa inválida');
-  const table = await prisma.table.findUnique({ where: { id: tableId } });
+  const table = await prisma.table.findUnique({
+    where: { id: tableId },
+    include: tableInclude,
+  });
   if (!table) throw new AppError('La mesa no existe');
   return table;
 }
 
-export async function getTableState(tableId: string): Promise<TableStateDTO> {
-  const table = await requireTable(tableId);
+export async function getTableState(tableId: string, clientPin?: string): Promise<TableStateDTO> {
+  let table = await requireTable(tableId);
+
+  // Si esta mesa está unida a otra, trabajar con la mesa principal
+  if (table.mergedWithTableId) {
+    const parentTable = await prisma.table.findUnique({
+      where: { id: table.mergedWithTableId },
+      include: tableInclude,
+    });
+    if (parentTable) {
+      table = parentTable;
+      tableId = parentTable.id;
+    }
+  }
+
+  let sessionCode = table.sessionCode;
+  let needsPin = false;
+
+  if (!sessionCode) {
+    // Primera persona que escanea la mesa: crear PIN de 4 dígitos automático
+    sessionCode = Math.floor(1000 + Math.random() * 9000).toString();
+    table = await prisma.table.update({
+      where: { id: table.id },
+      data: { sessionCode, status: 'occupied' },
+      include: tableInclude,
+    });
+  } else {
+    // Ya existe sesión activa: validar si el cliente envió el PIN correcto
+    if (!clientPin || clientPin.trim() !== sessionCode) {
+      needsPin = true;
+    }
+  }
+
+  if (needsPin) {
+    return {
+      table: toTableDTO(table),
+      orders: [],
+      requests: [],
+      sessionCode: null,
+      needsPin: true,
+    };
+  }
+
   const [orders, requests] = await Promise.all([
     prisma.order.findMany({
       where: { tableId, status: { not: 'paid' } },
@@ -128,7 +193,13 @@ export async function getTableState(tableId: string): Promise<TableStateDTO> {
       orderBy: { createdAt: 'asc' },
     }),
   ]);
-  return { table: toTableDTO(table), orders: orders.map(toOrderDTO), requests: requests.map(toRequestDTO) };
+  return {
+    table: toTableDTO(table),
+    orders: orders.map(toOrderDTO),
+    requests: requests.map(toRequestDTO),
+    sessionCode,
+    needsPin: false,
+  };
 }
 
 export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
@@ -136,7 +207,10 @@ export async function getDashboardSnapshot(): Promise<DashboardSnapshot> {
   startOfShift.setHours(0, 0, 0, 0);
 
   const [tables, orders, requests, payments, settings] = await Promise.all([
-    prisma.table.findMany({ orderBy: { number: 'asc' } }),
+    prisma.table.findMany({
+      orderBy: [{ floor: 'asc' }, { number: 'asc' }],
+      include: tableInclude,
+    }),
     prisma.order.findMany({ where: { status: { not: 'paid' } }, include: orderInclude, orderBy: { createdAt: 'asc' } }),
     prisma.serviceRequest.findMany({ where: { status: 'pending' }, include: requestInclude, orderBy: { createdAt: 'asc' } }),
     prisma.payment.findMany({
@@ -309,14 +383,154 @@ export async function confirmPayment(tableId: string, method: PaymentMethod, cas
       data: { status: 'resolved', resolvedAt: now },
     });
 
-    const table = await tx.table.update({ where: { id: tableId }, data: { status: 'free' } });
+    const table = await tx.table.update({
+      where: { id: tableId },
+      data: { status: 'free', sessionCode: null },
+      include: tableInclude,
+    });
+
+    // Si la mesa tenía mesas unidas a ella, liberarlas también
+    const mergedSecondaries = await tx.table.findMany({
+      where: { mergedWithTableId: tableId },
+      include: tableInclude,
+    });
+    if (mergedSecondaries.length > 0) {
+      await tx.table.updateMany({
+        where: { mergedWithTableId: tableId },
+        data: { status: 'free', sessionCode: null, mergedWithTableId: null },
+      });
+    }
 
     return {
       payment: payment ? toPaymentDTO(payment) : null,
       paidOrderIds: unpaid.map((o) => o.id),
       resolvedRequests: pending.map((r) => ({ ...toRequestDTO(r), status: 'resolved' as const })),
       table: toTableDTO(table),
+      freedSecondaryTableIds: mergedSecondaries.map((m) => m.id),
     };
+  });
+}
+
+/** Mozo/Staff cancela la sesión activa y libera la mesa (ej: cliente se fue sin pedir). */
+export async function cancelSession(tableId: string) {
+  await requireTable(tableId);
+  const now = new Date();
+
+  return prisma.$transaction(async (tx) => {
+    // Buscar órdenes impagas asociadas
+    const unpaid = await tx.order.findMany({ where: { tableId, status: { not: 'paid' } } });
+    if (unpaid.length) {
+      await tx.order.updateMany({
+        where: { id: { in: unpaid.map((o) => o.id) } },
+        data: { status: 'paid', paidAt: now },
+      });
+    }
+
+    // Resolver solicitudes pendientes
+    const pending = await tx.serviceRequest.findMany({ where: { tableId, status: 'pending' }, include: requestInclude });
+    if (pending.length) {
+      await tx.serviceRequest.updateMany({
+        where: { id: { in: pending.map((r) => r.id) } },
+        data: { status: 'resolved', resolvedAt: now },
+      });
+    }
+
+    // Liberar mesa
+    const table = await tx.table.update({
+      where: { id: tableId },
+      data: { status: 'free', sessionCode: null },
+      include: tableInclude,
+    });
+
+    // Liberar mesas secundarias unidas si las hubiere
+    const merged = await tx.table.findMany({ where: { mergedWithTableId: tableId } });
+    if (merged.length) {
+      await tx.table.updateMany({
+        where: { mergedWithTableId: tableId },
+        data: { status: 'free', sessionCode: null, mergedWithTableId: null },
+      });
+    }
+
+    return {
+      table: toTableDTO(table),
+      cancelledOrderIds: unpaid.map((o) => o.id),
+      resolvedRequests: pending.map((r) => ({ ...toRequestDTO(r), status: 'resolved' as const })),
+      secondaryTableIds: merged.map((m) => m.id),
+    };
+  });
+}
+
+/** Mozo une dos mesas (ej: Mesa 3 se une a Mesa 2). */
+export async function mergeTables(primaryTableId: string, secondaryTableId: string) {
+  if (primaryTableId === secondaryTableId) throw new AppError('No puedes unir una mesa consigo misma');
+  const primary = await requireTable(primaryTableId);
+  const secondary = await requireTable(secondaryTableId);
+
+  return prisma.$transaction(async (tx) => {
+    // Si la mesa secundaria tenía pedidos impagos, transferirlos a la principal
+    await tx.order.updateMany({
+      where: { tableId: secondaryTableId, status: { not: 'paid' } },
+      data: { tableId: primaryTableId },
+    });
+    await tx.serviceRequest.updateMany({
+      where: { tableId: secondaryTableId, status: 'pending' },
+      data: { tableId: primaryTableId },
+    });
+
+    const sessionCode = primary.sessionCode || Math.floor(1000 + Math.random() * 9000).toString();
+
+    // Actualizar mesa principal
+    const updatedPrimary = await tx.table.update({
+      where: { id: primaryTableId },
+      data: { status: 'occupied', sessionCode },
+      include: tableInclude,
+    });
+
+    // Actualizar mesa secundaria
+    const updatedSecondary = await tx.table.update({
+      where: { id: secondaryTableId },
+      data: {
+        mergedWithTableId: primaryTableId,
+        status: 'occupied',
+        sessionCode,
+      },
+      include: tableInclude,
+    });
+
+    return {
+      primary: toTableDTO(updatedPrimary),
+      secondary: toTableDTO(updatedSecondary),
+    };
+  });
+}
+
+/** Mozo separa una mesa unida. */
+export async function unmergeTable(tableId: string) {
+  const table = await requireTable(tableId);
+
+  return prisma.$transaction(async (tx) => {
+    const parentId = table.mergedWithTableId;
+
+    if (parentId) {
+      // Es una mesa secundaria: desvincularla
+      await tx.table.update({
+        where: { id: tableId },
+        data: { mergedWithTableId: null, status: 'free', sessionCode: null },
+      });
+    } else {
+      // Es la mesa principal: desvincular todas las secundarias unidas a ella
+      await tx.table.updateMany({
+        where: { mergedWithTableId: tableId },
+        data: { mergedWithTableId: null, status: 'free', sessionCode: null },
+      });
+    }
+
+    const refetched = await tx.table.findUnique({
+      where: { id: tableId },
+      include: tableInclude,
+    });
+
+    return toTableDTO(refetched!);
   });
 }
 

@@ -8,12 +8,15 @@ import {
 } from '@/lib/types';
 import {
   AppError,
+  cancelSession,
   confirmPayment,
   createOrder,
   createServiceRequest,
   getDashboardSnapshot,
   getTableState,
+  mergeTables,
   resolveServiceRequest,
+  unmergeTable,
   updateOrderStatus,
 } from './services';
 
@@ -49,13 +52,17 @@ export function registerSocketHandlers(io: IO) {
     // ------------------------------------------------------------------ Join
     socket.on('table:join', (payload, ack) =>
       handle(ack, async () => {
-        const state = await getTableState(payload?.tableId);
+        const state = await getTableState(payload?.tableId, payload?.pin);
+        if (state.needsPin) {
+          return state;
+        }
         if (socket.data.tableId && socket.data.tableId !== state.table.id) {
           socket.leave(rooms.table(socket.data.tableId));
         }
         socket.data.role = 'table';
         socket.data.tableId = state.table.id;
         await socket.join(rooms.table(state.table.id));
+        toTableAndStaff(state.table.id).emit('table:updated', state.table);
         return state;
       }),
     );
@@ -119,8 +126,53 @@ export function registerSocketHandlers(io: IO) {
         if (result.payment) io.to(rooms.staff).emit('payment:created', result.payment);
         for (const r of result.resolvedRequests) toTableAndStaff(tableId).emit('service:updated', r);
         toTableAndStaff(tableId).emit('table:updated', result.table);
-        toTableAndStaff(tableId).emit('table:closed', { tableId, orderIds: result.paidOrderIds });
+        toTableAndStaff(tableId).emit('table:closed', { tableId, orderIds: result.paidOrderIds, reason: 'paid' });
+        if (result.freedSecondaryTableIds) {
+          for (const secId of result.freedSecondaryTableIds) {
+            toTableAndStaff(secId).emit('table:closed', { tableId: secId, orderIds: [], reason: 'paid' });
+          }
+        }
         return result.payment;
+      }),
+    );
+
+    // ------------------------------------------------------------------ Salón / Mozo
+    socket.on('table:cancel-session', (payload, ack) =>
+      handle(ack, async () => {
+        requireStaff(socket);
+        const result = await cancelSession(payload?.tableId);
+        const tableId = result.table.id;
+        for (const r of result.resolvedRequests) toTableAndStaff(tableId).emit('service:updated', r);
+        toTableAndStaff(tableId).emit('table:updated', result.table);
+        toTableAndStaff(tableId).emit('table:closed', { tableId, orderIds: result.cancelledOrderIds, reason: 'cancelled' });
+        if (result.secondaryTableIds) {
+          for (const secId of result.secondaryTableIds) {
+            toTableAndStaff(secId).emit('table:closed', { tableId: secId, orderIds: [], reason: 'cancelled' });
+          }
+        }
+        return { ok: true };
+      }),
+    );
+
+    socket.on('table:merge', (payload, ack) =>
+      handle(ack, async () => {
+        requireStaff(socket);
+        const { primary, secondary } = await mergeTables(payload.primaryTableId, payload.secondaryTableId);
+        io.to(rooms.staff).emit('table:updated', primary);
+        io.to(rooms.staff).emit('table:updated', secondary);
+        toTableAndStaff(primary.id).emit('table:updated', primary);
+        toTableAndStaff(secondary.id).emit('table:updated', secondary);
+        return primary;
+      }),
+    );
+
+    socket.on('table:unmerge', (payload, ack) =>
+      handle(ack, async () => {
+        requireStaff(socket);
+        const table = await unmergeTable(payload.tableId);
+        io.to(rooms.staff).emit('table:updated', table);
+        toTableAndStaff(table.id).emit('table:updated', table);
+        return table;
       }),
     );
   });

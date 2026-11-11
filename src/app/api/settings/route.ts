@@ -30,6 +30,7 @@ export async function GET() {
       phone: settings.phone,
       logoUrl: settings.logoUrl,
       ticketFooter: settings.ticketFooter,
+      appDomain: settings.appDomain,
     };
 
     return NextResponse.json({ ok: true, settings: dto });
@@ -42,7 +43,7 @@ export async function GET() {
 export async function PUT(req: Request) {
   try {
     const body = await req.json();
-    const { name, ruc, address, phone, logoUrl, ticketFooter } = body;
+    const { name, ruc, address, phone, logoUrl, ticketFooter, appDomain } = body;
 
     const updated = await prisma.businessSetting.upsert({
       where: { id: 'default' },
@@ -54,6 +55,7 @@ export async function PUT(req: Request) {
         phone: phone?.trim() || '',
         logoUrl: logoUrl?.trim() || null,
         ticketFooter: ticketFooter?.trim() || '',
+        appDomain: appDomain?.trim() || '',
       },
       update: {
         ...(name !== undefined && { name: name.trim() }),
@@ -62,6 +64,7 @@ export async function PUT(req: Request) {
         ...(phone !== undefined && { phone: phone.trim() }),
         ...(logoUrl !== undefined && { logoUrl: logoUrl?.trim() || null }),
         ...(ticketFooter !== undefined && { ticketFooter: ticketFooter.trim() }),
+        ...(appDomain !== undefined && { appDomain: appDomain.trim() }),
       },
     });
 
@@ -73,6 +76,7 @@ export async function PUT(req: Request) {
       phone: updated.phone,
       logoUrl: updated.logoUrl,
       ticketFooter: updated.ticketFooter,
+      appDomain: updated.appDomain,
     };
 
     return NextResponse.json({ ok: true, settings: dto });

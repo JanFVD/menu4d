@@ -1,8 +1,8 @@
 import type { Metadata } from 'next';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { TableApp } from '@/components/client/TableApp';
-import type { CategoryDTO } from '@/lib/types';
+import type { CategoryDTO, TableDTO } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Menu4D — Tu mesa' };
@@ -10,8 +10,19 @@ export const metadata: Metadata = { title: 'Menu4D — Tu mesa' };
 /** Entrada desde el QR: /mesa/:idMesa */
 export default async function MesaPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const table = await prisma.table.findUnique({ where: { id } });
+  const table = await prisma.table.findUnique({
+    where: { id },
+    include: {
+      mergedWithTable: { select: { id: true, number: true } },
+      mergedTables: { select: { id: true, number: true } },
+    },
+  });
   if (!table) notFound();
+
+  // Si esta mesa está unida a otra, redirigir a la mesa principal
+  if (table.mergedWithTableId) {
+    redirect(`/mesa/${table.mergedWithTableId}`);
+  }
 
   const categories = await prisma.category.findMany({
     orderBy: { sortOrder: 'asc' },
@@ -32,6 +43,15 @@ export default async function MesaPage({ params }: { params: Promise<{ id: strin
       })),
     }));
 
-  return <TableApp initialTable={{ id: table.id, number: table.number, status: table.status }} categories={menu} />;
-}
+  const initialTable: TableDTO = {
+    id: table.id,
+    number: table.number,
+    floor: table.floor,
+    status: table.status,
+    sessionCode: table.sessionCode,
+    mergedWithTableId: table.mergedWithTableId,
+    mergedTables: table.mergedTables,
+  };
 
+  return <TableApp initialTable={initialTable} categories={menu} />;
+}

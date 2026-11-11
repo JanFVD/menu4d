@@ -16,7 +16,12 @@ export const PAYMENT_METHODS: PaymentMethod[] = ['cash', 'mercado_pago', 'credit
 export interface TableDTO {
   id: string;
   number: number;
+  floor: number;
   status: TableStatus;
+  sessionCode?: string | null;
+  mergedWithTableId?: string | null;
+  mergedWithTableNumber?: number | null;
+  mergedTables?: { id: string; number: number }[];
 }
 
 export interface ProductDTO {
@@ -91,6 +96,7 @@ export interface BusinessSettingDTO {
   phone: string;
   logoUrl: string | null;
   ticketFooter: string;
+  appDomain?: string | null;
 }
 
 export interface PaymentItemDTO {
@@ -116,6 +122,8 @@ export interface TableStateDTO {
   table: TableDTO;
   orders: OrderDTO[]; // órdenes impagas de la mesa
   requests: ServiceRequestDTO[]; // solicitudes pendientes
+  sessionCode?: string | null;
+  needsPin?: boolean;
 }
 
 /** Estado inicial del dashboard (salón, cocina y caja). */
@@ -146,8 +154,8 @@ export type Ack<T> = (res: AckResponse<T>) => void;
  *   - `staff`: dashboard (resumen, salón, cocina, caja)
  */
 export interface ClientToServerEvents {
-  /** Comensal escanea el QR → se une al room de su mesa. */
-  'table:join': (payload: { tableId: string }, ack: Ack<TableStateDTO>) => void;
+  /** Comensal escanea el QR → se une al room de su mesa (con PIN opcional si ya hay sesión). */
+  'table:join': (payload: { tableId: string; pin?: string }, ack: Ack<TableStateDTO>) => void;
   /** Dashboard se une al room `staff` (PIN opcional vía STAFF_PIN). */
   'staff:join': (payload: { pin?: string }, ack: Ack<DashboardSnapshot>) => void;
 
@@ -166,6 +174,13 @@ export interface ClientToServerEvents {
 
   /** Caja confirma el cobro → órdenes `paid`, solicitudes resueltas, mesa `free`. */
   'payment:confirm': (payload: { tableId: string; method: PaymentMethod; cashierName?: string }, ack: Ack<PaymentDTO | null>) => void;
+
+  /** Mozo / Staff une una mesa con otra */
+  'table:merge': (payload: { primaryTableId: string; secondaryTableId: string }, ack: Ack<TableDTO>) => void;
+  /** Mozo / Staff separa una mesa unida */
+  'table:unmerge': (payload: { tableId: string }, ack: Ack<TableDTO>) => void;
+  /** Mozo / Staff cancela la sesión activa y libera la mesa */
+  'table:cancel-session': (payload: { tableId: string }, ack: Ack<{ ok: boolean }>) => void;
 }
 
 /** Servidor → Clientes (broadcasts). */
@@ -177,8 +192,8 @@ export interface ServerToClientEvents {
   'table:updated': (table: TableDTO) => void; // → staff + table
   'payment:created': (payment: PaymentDTO) => void; // → staff
   'settings:updated': (settings: BusinessSettingDTO) => void; // → staff
-  /** → staff + table. Mesa cobrada: el cliente resetea su pantalla y el staff descarta esas órdenes. */
-  'table:closed': (payload: { tableId: string; orderIds: string[] }) => void;
+  /** → staff + table. Mesa cobrada o cancelada: resetea y descarta órdenes. */
+  'table:closed': (payload: { tableId: string; orderIds: string[]; reason?: 'paid' | 'cancelled' }) => void;
 }
 
 export interface SocketData {

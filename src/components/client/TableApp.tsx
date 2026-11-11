@@ -5,7 +5,9 @@ import {
   Banknote,
   BellRing,
   CreditCard,
+  KeyRound,
   Loader2,
+  Lock,
   Minus,
   PartyPopper,
   Plus,
@@ -58,6 +60,13 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
   const [toast, setToast] = useState<Toast | null>(null);
   const [activeCat, setActiveCat] = useState<string | undefined>(categories[0]?.id);
 
+  // Estados de sesión con PIN de 4 dígitos
+  const [needsPin, setNeedsPin] = useState(false);
+  const [sessionCode, setSessionCode] = useState<string | null>(initialTable.sessionCode ?? null);
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [submittingPin, setSubmittingPin] = useState(false);
+
   const products = useMemo(() => {
     const m = new Map<string, ProductDTO>();
     categories.forEach((c) => c.products.forEach((p) => m.set(p.id, p)));
@@ -78,14 +87,25 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
   useEffect(() => {
     const s = getSocket();
 
-    const join = () =>
-      request<TableStateDTO>((ack) => s.emit('table:join', { tableId: initialTable.id }, ack))
+    const join = (customPin?: string) => {
+      const pinToSend = customPin || sessionStorage.getItem(`menu4d:pin:${initialTable.id}`) || undefined;
+      return request<TableStateDTO>((ack) => s.emit('table:join', { tableId: initialTable.id, pin: pinToSend }, ack))
         .then((st) => {
+          if (st.needsPin) {
+            setNeedsPin(true);
+            return;
+          }
+          setNeedsPin(false);
           setTable(st.table);
           setOrders(st.orders);
           setRequests(st.requests);
+          if (st.sessionCode) {
+            setSessionCode(st.sessionCode);
+            sessionStorage.setItem(`menu4d:pin:${initialTable.id}`, st.sessionCode);
+          }
         })
         .catch((e: Error) => showToast(e.message, 'error'));
+    };
 
     const upsertOrder = (o: OrderDTO) =>
       setOrders((prev) => {
@@ -113,6 +133,12 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
       setCart({});
       setCartOpen(false);
       setBillOpen(false);
+      setSessionCode(null);
+      try {
+        sessionStorage.removeItem(`menu4d:pin:${initialTable.id}`);
+      } catch {
+        /* noop */
+      }
       setClosed(true);
       try {
         window.close();
@@ -226,6 +252,92 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
 
   const activeOrders = [...orders].reverse();
 
+  const handlePinSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pinInput.length !== 4) return;
+    setSubmittingPin(true);
+    setPinError(null);
+    try {
+      const s = getSocket();
+      const st = await request<TableStateDTO>((ack) =>
+        s.emit('table:join', { tableId: initialTable.id, pin: pinInput }, ack),
+      );
+      if (st.needsPin) {
+        setPinError('Código incorrecto. Verifica los 4 dígitos con la persona que abrió la mesa.');
+      } else {
+        setNeedsPin(false);
+        setTable(st.table);
+        setOrders(st.orders);
+        setRequests(st.requests);
+        if (st.sessionCode) {
+          setSessionCode(st.sessionCode);
+          sessionStorage.setItem(`menu4d:pin:${initialTable.id}`, st.sessionCode);
+        }
+      }
+    } catch (err) {
+      setPinError((err as Error).message);
+    } finally {
+      setSubmittingPin(false);
+    }
+  };
+
+  if (needsPin) {
+    return (
+      <div className="flex min-h-dvh flex-col items-center justify-center p-6 text-center animate-fade-in bg-background">
+        <div className="w-full max-w-sm space-y-6 rounded-2xl border bg-card p-6 shadow-xl">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-500">
+            <Lock className="h-8 w-8" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold">Mesa #{table.number}</h1>
+            <span className="inline-block mt-1 rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground font-semibold">
+              Piso {table.floor || 1}
+            </span>
+            <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
+              Esta mesa ya tiene una sesión iniciada. Pídele el <b>código de 4 dígitos</b> que aparece en la pantalla de tu acompañante para unirte.
+            </p>
+          </div>
+
+          {pinError && (
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 p-2.5 text-xs text-red-300 font-medium">
+              {pinError}
+            </div>
+          )}
+
+          <form onSubmit={handlePinSubmit} className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-muted-foreground">Código de 4 dígitos</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={4}
+                autoFocus
+                value={pinInput}
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, '').slice(0, 4);
+                  setPinInput(val);
+                  setPinError(null);
+                }}
+                placeholder="• • • •"
+                className="w-full rounded-xl border bg-background py-3 text-center text-3xl font-black tracking-[0.5em] focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+
+            <Button
+              type="submit"
+              size="lg"
+              className="w-full font-bold"
+              disabled={pinInput.length !== 4 || submittingPin}
+            >
+              {submittingPin ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Unirme a la mesa'}
+            </Button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   if (closed) {
     return (
       <div className="fixed inset-0 z-50 flex min-h-dvh flex-col items-center justify-center bg-background p-6 text-center animate-fade-in">
@@ -273,7 +385,7 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
             </p>
             <p className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className={cn('h-2 w-2 rounded-full', connected ? 'bg-emerald-500' : 'bg-red-500')} />
-              Mesa {table.number}
+              Mesa {table.number} · Piso {table.floor || 1}
               {!connected && ' · reconectando…'}
             </p>
           </div>
@@ -281,6 +393,22 @@ export function TableApp({ initialTable, categories }: { initialTable: TableDTO;
             <Receipt /> Pedir la cuenta
           </Button>
         </div>
+
+        {/* Banner de Código de Mesa para compartir con acompañantes */}
+        {sessionCode && (
+          <div className="flex items-center justify-between border-t bg-amber-500/10 px-4 py-2 text-xs">
+            <div className="flex items-center gap-1.5 font-bold text-amber-500">
+              <KeyRound className="h-3.5 w-3.5" />
+              <span>Código:</span>
+              <span className="rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-sm tracking-widest text-amber-300">
+                {sessionCode}
+              </span>
+            </div>
+            <span className="text-[10px] text-muted-foreground">
+              Comparte con quien se sume a tu mesa
+            </span>
+          </div>
+        )}
 
         {/* Categorías */}
         <nav className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3" aria-label="Categorías">

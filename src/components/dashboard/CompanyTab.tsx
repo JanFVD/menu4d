@@ -159,6 +159,20 @@ export function CompanyTab() {
               </div>
 
               <div className="space-y-1">
+                <label className="text-xs font-semibold text-primary">Dominio o URL Base para Códigos QR</label>
+                <input
+                  type="url"
+                  value={form.appDomain || ''}
+                  onChange={(e) => setForm({ ...form, appDomain: e.target.value || '' })}
+                  placeholder="Ej: https://carta.elbuensabor.pe o http://192.168.1.50:3000"
+                  className="w-full rounded-md border border-primary/40 bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Se codificará en todos los códigos QR de las mesas en lugar de localhost para que los comensales puedan acceder desde sus celulares.
+                </p>
+              </div>
+
+              <div className="space-y-1">
                 <label className="text-xs font-semibold">Mensaje de Pie de Ticket</label>
                 <textarea
                   rows={3}

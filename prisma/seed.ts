@@ -52,9 +52,9 @@ async function main() {
   await prisma.user.deleteMany();
   await prisma.businessSetting.deleteMany();
 
-  // Mesas
+  // Mesas (Piso 1 y Piso 2)
   for (let n = 1; n <= 12; n++) {
-    await prisma.table.create({ data: { number: n } });
+    await prisma.table.create({ data: { number: n, floor: n <= 8 ? 1 : 2 } });
   }
 
   // Menú
